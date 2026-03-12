@@ -22,15 +22,18 @@ bot = Bot(
 dp = Dispatcher()
 
 
+# START COMMAND
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     await message.answer(
-        "👋 <b>Instagram Downloader Bot</b>\n\n"
+        "👋 <b>Instagram Downloader</b>\n\n"
         "Send an Instagram link and I will download the media."
     )
 
 
+# FETCH INSTAGRAM DATA
 async def fetch_instagram(url: str):
+
     api = f"{API_URL}{url}"
 
     async with aiohttp.ClientSession() as session:
@@ -38,35 +41,42 @@ async def fetch_instagram(url: str):
             return await resp.json()
 
 
+# STREAM DOWNLOAD FILE
 async def download_file(url):
-    filename = f"media_{uuid.uuid4().hex}"
+
+    filename = f"/tmp/{uuid.uuid4().hex}"
 
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
-            content = await resp.read()
 
-    with open(filename, "wb") as f:
-        f.write(content)
+            with open(filename, "wb") as f:
+
+                async for chunk in resp.content.iter_chunked(1024 * 256):
+                    f.write(chunk)
 
     return filename
 
 
+# CREATE VIDEO THUMBNAIL
 def create_thumbnail(video_path):
-    thumb_path = f"{video_path}.jpg"
+
+    thumb = f"{video_path}.jpg"
 
     command = [
         "ffmpeg",
-        "-i", video_path,
         "-ss", "00:00:01",
-        "-vframes", "1",
-        thumb_path
+        "-i", video_path,
+        "-frames:v", "1",
+        "-q:v", "2",
+        thumb
     ]
 
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
-    return thumb_path
+    return thumb
 
 
+# MAIN DOWNLOADER
 @dp.message()
 async def downloader(message: Message):
 
@@ -79,6 +89,7 @@ async def downloader(message: Message):
     status = await message.reply("⏳ Fetching media...")
 
     try:
+
         data = await fetch_instagram(url)
 
         if not data.get("status"):
@@ -91,17 +102,18 @@ async def downloader(message: Message):
             await status.edit_text("❌ No media found.")
             return
 
-        await status.edit_text("📥 Downloading files...")
+        await status.edit_text("📥 Downloading...")
 
-        files = []
+        downloaded_files = []
 
         for media in media_list:
+
             file_path = await download_file(media["url"])
-            files.append((file_path, media["type"]))
+            downloaded_files.append((file_path, media["type"]))
 
-        await status.edit_text("⬆ Uploading to Telegram...")
+        await status.edit_text("⬆ Uploading...")
 
-        for file_path, media_type in files:
+        for file_path, media_type in downloaded_files:
 
             file = FSInputFile(file_path)
 
@@ -115,7 +127,8 @@ async def downloader(message: Message):
                     supports_streaming=True
                 )
 
-                os.remove(thumb)
+                if os.path.exists(thumb):
+                    os.remove(thumb)
 
             elif media_type == "image":
 
@@ -125,16 +138,21 @@ async def downloader(message: Message):
 
                 await message.answer_document(file)
 
-            os.remove(file_path)
+            if os.path.exists(file_path):
+                os.remove(file_path)
 
         await status.delete()
 
     except Exception as e:
+
         await message.reply(f"❌ Error: {e}")
 
 
+# RUN BOT
 async def main():
+
     print("🚀 Bot started")
+
     await dp.start_polling(bot)
 
 

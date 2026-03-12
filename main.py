@@ -1,8 +1,10 @@
 import asyncio
 import aiohttp
+import os
+import uuid
 
 from aiogram import Bot, Dispatcher
-from aiogram.types import Message, InputMediaPhoto, InputMediaVideo
+from aiogram.types import Message, FSInputFile
 from aiogram.filters import CommandStart
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
@@ -22,62 +24,81 @@ dp = Dispatcher()
 @dp.message(CommandStart())
 async def start_handler(message: Message):
     await message.answer(
-        "👋 <b>Instagram Downloader Bot</b>\n\n"
-        "Send me an Instagram link and I will download the media for you."
+        "👋 <b>Instagram Downloader</b>\n\n"
+        "Send me an Instagram link."
     )
 
 
-async def fetch_instagram_data(url: str):
+async def fetch_instagram(url: str):
     api = f"{API_URL}{url}"
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(api) as response:
-            return await response.json()
+        async with session.get(api) as resp:
+            return await resp.json()
+
+
+async def download_file(url):
+    filename = f"media_{uuid.uuid4().hex}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            content = await resp.read()
+
+    with open(filename, "wb") as f:
+        f.write(content)
+
+    return filename
 
 
 @dp.message()
-async def download_instagram(message: Message):
+async def downloader(message: Message):
+
     url = message.text.strip()
 
     if "instagram.com" not in url:
-        await message.reply("❌ Please send a valid Instagram link.")
+        await message.reply("❌ Send a valid Instagram link.")
         return
 
-    status_msg = await message.reply("⏳ Downloading media...")
+    status = await message.reply("⏳ Downloading media...")
 
     try:
-        data = await fetch_instagram_data(url)
+        data = await fetch_instagram(url)
 
         if not data.get("status"):
-            await status_msg.edit_text("❌ Failed to fetch media.")
+            await status.edit_text("❌ Failed to fetch media.")
             return
 
         media_list = data.get("data", [])
 
-        if not media_list:
-            await status_msg.edit_text("❌ No media found.")
-            return
+        await status.edit_text("📥 Downloading files...")
 
-        media_group = []
+        files = []
 
         for media in media_list:
-            media_url = media["url"]
-            media_type = media["type"]
+            file_path = await download_file(media["url"])
+            files.append((file_path, media["type"]))
 
-            if media_type == "image":
-                media_group.append(InputMediaPhoto(media=media_url))
+        await status.edit_text("⬆ Uploading to Telegram...")
 
-            elif media_type == "video":
-                media_group.append(InputMediaVideo(media=media_url))
+        for file_path, media_type in files:
 
-        await status_msg.delete()
+            file = FSInputFile(file_path)
 
-        # Telegram limit: max 10 items per media group
-        for i in range(0, len(media_group), 10):
-            await message.answer_media_group(media_group[i:i + 10])
+            if media_type == "video":
+                await message.answer_video(file)
+
+            elif media_type == "image":
+                await message.answer_photo(file)
+
+            else:
+                await message.answer_document(file)
+
+            os.remove(file_path)
+
+        await status.delete()
 
     except Exception as e:
-        await status_msg.edit_text(f"❌ Error: {e}")
+        await message.reply(f"❌ Error: {e}")
 
 
 async def main():
